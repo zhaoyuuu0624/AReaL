@@ -4,6 +4,7 @@ from contextlib import contextmanager
 
 import torch
 from mbridge.core import LLMBridge
+from megatron.core import parallel_state
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.transformer import TransformerConfig
 from megatron.core.transformer.attention import SelfAttention
@@ -27,6 +28,7 @@ from areal.models.tree_attn.triton_kernel import (
     TreeAttentionData,
     tree_attention,
 )
+from areal.models.tree_attn.ulysses import tree_ulysses_attention
 from areal.utils import logging
 
 logger = logging.getLogger("TreeAttentionMegatron")
@@ -54,10 +56,33 @@ class PytorchFlexAttention(torch.nn.Module):
         self.softmax_scale = softmax_scale
         logger.info("Using PytorchFlexAttention for tree training attention")
 
-        # PytorchFlexAttention does not support context parallel
-        if config.context_parallel_size != 1:
-            raise ValueError(
-                "PytorchFlexAttention does not support context parallelism."
+        self.cp_group = None
+        if config.context_parallel_size > 1:
+            effective_dropout = (
+                config.attention_dropout
+                if attention_dropout is None
+                else attention_dropout
+            )
+            if effective_dropout != 0:
+                raise NotImplementedError(
+                    "Tree Ulysses requires attention_dropout=0; FlexAttention "
+                    "does not implement attention probability dropout"
+                )
+            if (
+                config.tensor_model_parallel_size != 1
+                or config.pipeline_model_parallel_size != 1
+            ):
+                raise NotImplementedError("Tree Ulysses currently requires TP=PP=1")
+            if (
+                config.num_attention_heads % config.context_parallel_size
+                or config.num_query_groups % config.context_parallel_size
+            ):
+                raise ValueError("Tree Ulysses requires Q and KV heads divisible by CP")
+            pg_collection = kwargs.get("pg_collection")
+            self.cp_group = (
+                pg_collection.cp
+                if pg_collection is not None
+                else parallel_state.get_context_parallel_group()
             )
 
         if attention_type != "self":
@@ -81,6 +106,41 @@ class PytorchFlexAttention(torch.nn.Module):
         #   - TreeAttentionData: for Triton tree attention
         #   - torch.Tensor: dense attention mask that will be converted to BlockMask
         # attention_mask_type: arbitrary
+
+        if self.cp_group is not None:
+            if attention_bias is not None or packed_seq_params is not None:
+                raise NotImplementedError(
+                    "Tree Ulysses does not support attention bias or THD"
+                )
+            if (
+                not isinstance(attention_mask, torch.Tensor)
+                or attention_mask.dtype != torch.bool
+            ):
+                raise ValueError(
+                    "Tree Ulysses requires a global dense boolean tree mask"
+                )
+            n = query.shape[0] * self.config.context_parallel_size
+            if attention_mask.shape != (n, n):
+                raise ValueError(
+                    "Tree Ulysses mask must use global padded-tree coordinates"
+                )
+            # The forward adapter makes padding safe once per microbatch.
+            # Do not allocate/retain a new global N*N mask in every layer.
+            block_mask = create_block_mask_from_dense(attention_mask, n, query.device)
+
+            def attend(q, k, v):
+                return _flex_attention(
+                    q,
+                    k,
+                    v,
+                    block_mask=block_mask,
+                    score_mod=None,
+                    scale=self.softmax_scale,
+                    enable_gqa=q.shape[1] != k.shape[1],
+                )
+
+            output = tree_ulysses_attention(query, key, value, attend, self.cp_group)
+            return output.reshape(output.shape[0], output.shape[1], -1)
 
         # Check for Triton path
         if (

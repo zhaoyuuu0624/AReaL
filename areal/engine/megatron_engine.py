@@ -98,6 +98,10 @@ from areal.engine.megatron_utils.pipeline_parallel import (
     configure_pipeline_layer_splits,
 )
 from areal.engine.megatron_utils.transport import validate_transport_padding
+from areal.engine.megatron_utils.tree_context_parallel import (
+    supports_tree_rotary_positions,
+    tree_context_parallel_forward,
+)
 from areal.infra.dist_rollout import DistRolloutCoordinator
 from areal.infra.platforms import current_platform, is_npu_available
 from areal.models.mcore.bailing_v3_bridge import BailingV3Bridge
@@ -114,6 +118,10 @@ from areal.models.mcore.registry import (
 from areal.models.mcore.vocab_parallel_head import (
     ChunkedLMHeadOutput,
     chunked_lm_head_logprobs_entropy,
+)
+from areal.models.tree_attn.cp_functional import (
+    TreePredictionPlan,
+    gather_tree_cp_scalars,
 )
 from areal.models.tree_attn.functional import (
     _gather_packed_tree_logprobs,
@@ -1405,7 +1413,20 @@ class MegatronEngine(TrainEngine):
                     )
                 mb_input.padded_mb["mtp_loss_mask"] = mtp_loss_mask
 
-            output = packed_context_parallel_forward(
+            forward_fn = (
+                tree_context_parallel_forward
+                if self.enable_tree_training
+                and (
+                    cp_size > 1
+                    or (
+                        mpu.get_tensor_model_parallel_world_size() == 1
+                        and mpu.get_pipeline_model_parallel_world_size() == 1
+                        and supports_tree_rotary_positions(model)
+                    )
+                )
+                else packed_context_parallel_forward
+            )
+            output = forward_fn(
                 model,
                 mb_input.padded_mb,
                 gather_cp_output=not cp_local,
@@ -1535,7 +1556,7 @@ class MegatronEngine(TrainEngine):
                     cp_inputs["_cp_padding_length"] = mb_input.padding_length
                     cp_inputs["_cp_old_cu_seqlens"] = mb_input.old_cu_seqlens
                     return output, functools.partial(_process_output, cp_inputs)
-                else:
+                elif not (self.enable_tree_training and cp_size > 1):
                     output = unpad_logits(
                         output,
                         padding_length=mb_input.padding_length,
@@ -3039,16 +3060,34 @@ class MegatronEngine(TrainEngine):
         cp_size = self.parallel_strategy.context_parallel_size
         tp_size = self.parallel_strategy.tensor_parallel_size
         if self.enable_tree_training:
-            assert cp_size == 1, (
-                "Context parallelism is not supported in tree training."
-            )
+            if cp_size > 1:
+                if tp_size != 1 or pp_size != 1:
+                    raise NotImplementedError("Tree Ulysses currently requires TP=PP=1")
+                if (
+                    self.config.is_critic
+                    or self.is_vision_model
+                    or self.use_padded_seq
+                    or self.mcore_config.enable_mtp_training
+                    or getattr(self.tf_config, "mtp_num_layers", None)
+                    or self.tf_config.multi_latent_attention
+                    or self.tf_config.num_moe_experts
+                    or self.enable_fp8
+                ):
+                    raise NotImplementedError(
+                        "Tree Ulysses initially supports non-FP8 dense text actors only"
+                    )
             mb_list = build_packed_tree_batch(
                 input_,
                 mb_spec=self.config.mb_spec,
                 pad_to_maximum=self.config.pad_to_maximum,
                 dp_group=self.data_parallel_group,
-                parallel_size=tp_size,
+                parallel_size=tp_size * cp_size,
             )
+            if cp_size > 1:
+                for mb, padded_mb in zip(mb_list.mbs, mb_list.padded_mbs):
+                    plan = TreePredictionPlan.from_trie(padded_mb["trie_node"])
+                    mb["_tree_cp_prediction_plan"] = plan
+                    padded_mb["_tree_cp_prediction_plan"] = plan
             recommended_min_n_mbs = 2 * pp_size if pp_size > 1 else 1
             self.logger.info(
                 f"Packed tree #microbatch: {len(mb_list)}, microbatch #tokens: {mb_list.group_lens}, "
@@ -3206,23 +3245,42 @@ class MegatronEngine(TrainEngine):
                 # unpack vocab stats from tree structure back to per-sequence format.
                 # This is necessary because the logits are in packed tree format where
                 # multiple sequences share prefix positions.
-                vocab_min_logits, vocab_max_logits = gather_packed_tree_vocab_stats(
-                    output, trie_node
-                )
+                if mpu.get_context_parallel_world_size() > 1:
+                    lp_dict, ent_dict, vocab_min_logits, vocab_max_logits = (
+                        gather_tree_cp_scalars(
+                            output,
+                            inputs["input_ids"],
+                            inputs["_tree_cp_prediction_plan"],
+                            mpu.get_context_parallel_group(),
+                            temperature=self.config.temperature,
+                            chunk_size=self.config.logprobs_chunk_size,
+                        )
+                    )
+                    logprobs = torch.cat(
+                        [lp_dict[sid] for sid in trie_node.all_sequence_ids]
+                    )
+                    entropy = torch.cat(
+                        [ent_dict[sid] for sid in trie_node.all_sequence_ids]
+                    )
+                else:
+                    vocab_min_logits, vocab_max_logits = gather_packed_tree_vocab_stats(
+                        output, trie_node
+                    )
                 # Tree training only supports packed min/max vocab stats; mean/norm
                 # would need per-sequence unpacking, so leave them unset.
                 vocab_mean_logits = None
                 vocab_norm_logits = None
-                logprobs, entropy = gather_packed_tree_logprobs_entropy(
-                    output,
-                    trie_node,
-                    inputs["input_ids"],
-                    temperature=self.config.temperature,
-                    tp_group=mpu.get_tensor_model_parallel_group()
-                    if mpu.get_tensor_model_parallel_world_size() > 1
-                    else None,
-                    chunk_size=self.config.logprobs_chunk_size,
-                )
+                if mpu.get_context_parallel_world_size() == 1:
+                    logprobs, entropy = gather_packed_tree_logprobs_entropy(
+                        output,
+                        trie_node,
+                        inputs["input_ids"],
+                        temperature=self.config.temperature,
+                        tp_group=mpu.get_tensor_model_parallel_group()
+                        if mpu.get_tensor_model_parallel_world_size() > 1
+                        else None,
+                        chunk_size=self.config.logprobs_chunk_size,
+                    )
             else:
                 cp_padded_cu_seqlens = inputs.get("_cp_padded_cu_seqlens")
                 if isinstance(output, ChunkedLMHeadOutput):
@@ -3379,6 +3437,16 @@ class MegatronEngine(TrainEngine):
             if isinstance(output, ChunkedLMHeadOutput):
                 return output.logprobs
             if self.enable_tree_training:
+                if mpu.get_context_parallel_world_size() > 1:
+                    logprobs, _, _, _ = gather_tree_cp_scalars(
+                        output,
+                        inputs["input_ids"],
+                        inputs["_tree_cp_prediction_plan"],
+                        mpu.get_context_parallel_group(),
+                        temperature=self.config.temperature,
+                        chunk_size=self.config.logprobs_chunk_size,
+                    )
+                    return logprobs
                 logprobs = _gather_packed_tree_logprobs(
                     output,
                     inputs["trie_node"],
