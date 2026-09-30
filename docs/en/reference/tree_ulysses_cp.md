@@ -76,10 +76,13 @@ From the repository root with the dedicated environment active:
 
 ```bash
 python -m pytest tests/test_tree_cp.py -m 'not slow' -q
-CUDA_VISIBLE_DEVICES=0,1 python -m pytest tests/test_tree_cp.py -m slow -v
+CUDA_VISIBLE_DEVICES=0,1 python -m pytest tests/test_tree_cp.py -k two_gpu -vv -x
+CUDA_VISIBLE_DEVICES=0,1,2,3 python -m pytest tests/test_tree_cp.py -k four_gpu -vv -x
+CUDA_VISIBLE_DEVICES=0,1,2,3 python -m pytest tests/test_tree_cp.py -k precision_checkpoint -vv -x
 ```
 
-The torchrun wrapper uses a 600-second subprocess timeout. Tests construct
+The torchrun wrapper uses a 600-second subprocess timeout (1200 for multistep).
+It exports the repository path for child imports. Tests construct
 small models locally; no pretrained checkpoint is downloaded. The SDPA and
 FlexAttention variants compare Ulysses output, shared-prefix gradients, and
 one SGD update against independent unshared sequences. They cover MHA/GQA,
@@ -88,7 +91,30 @@ and finite zero-loss backward. The MCore variant additionally exercises the
 actual GPT/RoPE/core-attention adapter. The engine variant calls actual
 `train_batch` with random GPT weights, tree packing, MCore DDP, the scheduler,
 and an MCore FP32 SGD optimizer; it covers manual and per-token normalization
-over two packed microbatches. These tests do **not** by themselves
+over two packed microbatches.
+
+The four-GPU extension repeats the four levels at CP=4. Two additional engine
+cases run 10 changing tree batches at DP=1/CP=4 and DP=2/CP=2, each in both
+normalization modes. They include nested sharing, duplicate sequences,
+prefix-only samples, and independent roots. DP replicas use unequal token
+counts and different weights. Each rank's serial reference processes the full
+global batch without gradient collectives; the engine's gradients are never
+manually corrected. Loss, all parameter gradients, and post-SGD parameters are
+checked after every step. See `tree_ulysses_cp_validation.md` for the actual
+run result and tolerances.
+
+Nine precision/checkpoint cases additionally cover DP=1/CP=2, DP=1/CP=4,
+and DP=2/CP=2 in BF16, FP32 with checkpointing, and BF16 with checkpointing.
+Each runs three changing batches in both normalization modes. BF16 uses the
+actual MCore `Float16Module` and mixed-precision SGD with FP32 master weights;
+the reference accumulates independent-sequence gradients in FP32. A separate
+FP32 control checks mixed-precision numerical drift. Checkpointing uses full,
+uniform recomputation with one layer per checkpoint and is compared against
+the same-layout eager run. Layer-call counters assert that recomputation really
+executes in backward, and that temporary RoPE overrides do not leak between steps.
+This validates neither selective/block recomputation nor checkpoint memory savings.
+
+These tests do **not** by themselves
 certify the full RL trainer, all optimizer policies, or all checkpoint modes.
 
 Before using this branch for RL experiments, also validate the actual

@@ -1,0 +1,44 @@
+[
+  {
+    "run": "smoke_tree_dp4_cp1",
+    "workload_sha256": "344b2c28fa28af3805714292a8cbbbcce1e29fa626aeff9bd9776ed11fe1755d",
+    "mean_step_seconds": 0.07174513395875692,
+    "duplicated_prefix_tokens": 0,
+    "max_peak_allocated_bytes": 27061760
+  },
+  {
+    "run": "smoke_tree_dp2_cp2",
+    "workload_sha256": "344b2c28fa28af3805714292a8cbbbcce1e29fa626aeff9bd9776ed11fe1755d",
+    "mean_step_seconds": 0.11619179509580135,
+    "duplicated_prefix_tokens": 0,
+    "max_peak_allocated_bytes": 26220032
+  },
+  {
+    "run": "smoke_tree_dp1_cp4",
+    "workload_sha256": "344b2c28fa28af3805714292a8cbbbcce1e29fa626aeff9bd9776ed11fe1755d",
+    "mean_step_seconds": 0.2076048832386732,
+    "duplicated_prefix_tokens": 0,
+    "max_peak_allocated_bytes": 25905664
+  },
+  {
+    "run": "smoke_sequence_dp4_cp1",
+    "workload_sha256": "344b2c28fa28af3805714292a8cbbbcce1e29fa626aeff9bd9776ed11fe1755d",
+    "mean_step_seconds": 0.0680365264415741,
+    "duplicated_prefix_tokens": 256,
+    "max_peak_allocated_bytes": 27156992
+  },
+  {
+    "run": "smoke_sequence_dp2_cp2",
+    "workload_sha256": "344b2c28fa28af3805714292a8cbbbcce1e29fa626aeff9bd9776ed11fe1755d",
+    "mean_step_seconds": 0.12852055858820677,
+    "duplicated_prefix_tokens": 256,
+    "max_peak_allocated_bytes": 26215424
+  },
+  {
+    "run": "smoke_sequence_dp1_cp4",
+    "workload_sha256": "344b2c28fa28af3805714292a8cbbbcce1e29fa626aeff9bd9776ed11fe1755d",
+    "mean_step_seconds": 0.2011225800961256,
+    "duplicated_prefix_tokens": 0,
+    "max_peak_allocated_bytes": 25905664
+  }
+]

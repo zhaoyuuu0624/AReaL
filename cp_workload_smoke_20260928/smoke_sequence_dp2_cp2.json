@@ -1,0 +1,221 @@
+{
+  "kind": "synthetic_random_small_gpt_training_replay_not_full_rl",
+  "args": {
+    "workload": "/home/zhaoyu/Programs/AReaL/cp_workload_data_20260928/smoke.json.gz",
+    "output": "/home/zhaoyu/Programs/AReaL/cp_workload_smoke_20260928/smoke_sequence_dp2_cp2.json",
+    "cp": 2,
+    "cap": 128,
+    "policy": "sequence",
+    "precision": "bf16",
+    "checkpoint": false,
+    "layers": 2,
+    "hidden": 128,
+    "warmup": 1,
+    "steps": 2,
+    "model_seed": 7
+  },
+  "world_size": 4,
+  "dp_size": 2,
+  "tp_size": 1,
+  "pp_size": 1,
+  "parameters": 462336,
+  "environment": {
+    "versions": {
+      "torch": "2.10.0",
+      "megatron-core": "0.19.0",
+      "transformer-engine": "2.12.0",
+      "mbridge": "0.15.1"
+    },
+    "python": "3.12.3",
+    "cuda": "12.8",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "capability": [
+      12,
+      0
+    ]
+  },
+  "packing": {
+    "dp_size": 2,
+    "policy": "sequence",
+    "packing_cap": 128,
+    "workload_sha256": "344b2c28fa28af3805714292a8cbbbcce1e29fa626aeff9bd9776ed11fe1755d",
+    "global_batch_stats": {
+      "max_sequence_length": 64,
+      "original_tokens": 1024,
+      "supervised_tokens": 512,
+      "unique_allowed_attention_pairs": 29056,
+      "unique_tree_tokens": 768
+    },
+    "per_dp_rank": [
+      {
+        "real_microbatches": 4,
+        "packed_tokens": 512,
+        "allowed_attention_pairs": 16640,
+        "dummy_microbatches": 0,
+        "padded_tokens_including_dummy": 512
+      },
+      {
+        "real_microbatches": 4,
+        "packed_tokens": 512,
+        "allowed_attention_pairs": 16640,
+        "dummy_microbatches": 0,
+        "padded_tokens_including_dummy": 512
+      }
+    ],
+    "executed_unique_tokens_before_padding": 1024,
+    "duplicated_prefix_tokens": 256,
+    "padded_tokens_including_dummy": 1024,
+    "note": "Counts exclude CP replication; allowed attention pairs are semantic, not measured kernel FLOPs."
+  },
+  "timing_scope": "CPU packing, transfers, forward/backward, gradient communication and optimizer; excludes start barrier and metrics collection. Warmup updates weights and is recorded but excluded from summary.",
+  "mean_step_seconds": 0.12852055858820677,
+  "steps": [
+    {
+      "step": 0,
+      "warmup": true,
+      "step_seconds": 3.1336584333330393,
+      "original_tokens_per_second": 326.77460603478966,
+      "supervised_tokens_per_second": 163.38730301739483,
+      "ranks": [
+        {
+          "rank": 0,
+          "dp_rank": 0,
+          "cp_rank": 0,
+          "seconds": 3.1305098477751017,
+          "peak_allocated_bytes": 114595328,
+          "peak_reserved_bytes": 130023424,
+          "microbatches": 4,
+          "loss": 5.572795867919922
+        },
+        {
+          "rank": 1,
+          "dp_rank": 0,
+          "cp_rank": 1,
+          "seconds": 3.08587995916605,
+          "peak_allocated_bytes": 114595328,
+          "peak_reserved_bytes": 130023424,
+          "microbatches": 4,
+          "loss": 5.572795867919922
+        },
+        {
+          "rank": 2,
+          "dp_rank": 1,
+          "cp_rank": 0,
+          "seconds": 3.131261060014367,
+          "peak_allocated_bytes": 114595328,
+          "peak_reserved_bytes": 130023424,
+          "microbatches": 4,
+          "loss": 5.572795867919922
+        },
+        {
+          "rank": 3,
+          "dp_rank": 1,
+          "cp_rank": 1,
+          "seconds": 3.1336584333330393,
+          "peak_allocated_bytes": 114595328,
+          "peak_reserved_bytes": 130023424,
+          "microbatches": 4,
+          "loss": 5.572795867919922
+        }
+      ]
+    },
+    {
+      "step": 1,
+      "warmup": false,
+      "step_seconds": 0.12947382777929306,
+      "original_tokens_per_second": 7908.934319494722,
+      "supervised_tokens_per_second": 3954.467159747361,
+      "ranks": [
+        {
+          "rank": 0,
+          "dp_rank": 0,
+          "cp_rank": 0,
+          "seconds": 0.12947382777929306,
+          "peak_allocated_bytes": 26215424,
+          "peak_reserved_bytes": 130023424,
+          "microbatches": 4,
+          "loss": 5.503388404846191
+        },
+        {
+          "rank": 1,
+          "dp_rank": 0,
+          "cp_rank": 1,
+          "seconds": 0.10051938705146313,
+          "peak_allocated_bytes": 26215424,
+          "peak_reserved_bytes": 130023424,
+          "microbatches": 4,
+          "loss": 5.503388404846191
+        },
+        {
+          "rank": 2,
+          "dp_rank": 1,
+          "cp_rank": 0,
+          "seconds": 0.09968417324125767,
+          "peak_allocated_bytes": 26215424,
+          "peak_reserved_bytes": 130023424,
+          "microbatches": 4,
+          "loss": 5.503388404846191
+        },
+        {
+          "rank": 3,
+          "dp_rank": 1,
+          "cp_rank": 1,
+          "seconds": 0.09961008094251156,
+          "peak_allocated_bytes": 26215424,
+          "peak_reserved_bytes": 130023424,
+          "microbatches": 4,
+          "loss": 5.503388404846191
+        }
+      ]
+    },
+    {
+      "step": 2,
+      "warmup": false,
+      "step_seconds": 0.12756728939712048,
+      "original_tokens_per_second": 8027.136147827519,
+      "supervised_tokens_per_second": 4013.5680739137597,
+      "ranks": [
+        {
+          "rank": 0,
+          "dp_rank": 0,
+          "cp_rank": 0,
+          "seconds": 0.12756728939712048,
+          "peak_allocated_bytes": 26215424,
+          "peak_reserved_bytes": 130023424,
+          "microbatches": 4,
+          "loss": 5.435877323150635
+        },
+        {
+          "rank": 1,
+          "dp_rank": 0,
+          "cp_rank": 1,
+          "seconds": 0.09934800490736961,
+          "peak_allocated_bytes": 26215424,
+          "peak_reserved_bytes": 130023424,
+          "microbatches": 4,
+          "loss": 5.435877323150635
+        },
+        {
+          "rank": 2,
+          "dp_rank": 1,
+          "cp_rank": 0,
+          "seconds": 0.09810980595648289,
+          "peak_allocated_bytes": 26215424,
+          "peak_reserved_bytes": 130023424,
+          "microbatches": 4,
+          "loss": 5.435877323150635
+        },
+        {
+          "rank": 3,
+          "dp_rank": 1,
+          "cp_rank": 1,
+          "seconds": 0.09801003895699978,
+          "peak_allocated_bytes": 26215424,
+          "peak_reserved_bytes": 130023424,
+          "microbatches": 4,
+          "loss": 5.435877323150635
+        }
+      ]
+    }
+  ]
+}

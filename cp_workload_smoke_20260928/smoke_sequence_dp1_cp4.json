@@ -1,0 +1,214 @@
+{
+  "kind": "synthetic_random_small_gpt_training_replay_not_full_rl",
+  "args": {
+    "workload": "/home/zhaoyu/Programs/AReaL/cp_workload_data_20260928/smoke.json.gz",
+    "output": "/home/zhaoyu/Programs/AReaL/cp_workload_smoke_20260928/smoke_sequence_dp1_cp4.json",
+    "cp": 4,
+    "cap": 128,
+    "policy": "sequence",
+    "precision": "bf16",
+    "checkpoint": false,
+    "layers": 2,
+    "hidden": 128,
+    "warmup": 1,
+    "steps": 2,
+    "model_seed": 7
+  },
+  "world_size": 4,
+  "dp_size": 1,
+  "tp_size": 1,
+  "pp_size": 1,
+  "parameters": 462336,
+  "environment": {
+    "versions": {
+      "torch": "2.10.0",
+      "megatron-core": "0.19.0",
+      "transformer-engine": "2.12.0",
+      "mbridge": "0.15.1"
+    },
+    "python": "3.12.3",
+    "cuda": "12.8",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "capability": [
+      12,
+      0
+    ]
+  },
+  "packing": {
+    "dp_size": 1,
+    "policy": "sequence",
+    "packing_cap": 128,
+    "workload_sha256": "344b2c28fa28af3805714292a8cbbbcce1e29fa626aeff9bd9776ed11fe1755d",
+    "global_batch_stats": {
+      "max_sequence_length": 64,
+      "original_tokens": 1024,
+      "supervised_tokens": 512,
+      "unique_allowed_attention_pairs": 29056,
+      "unique_tree_tokens": 768
+    },
+    "per_dp_rank": [
+      {
+        "real_microbatches": 8,
+        "packed_tokens": 768,
+        "allowed_attention_pairs": 29056,
+        "dummy_microbatches": 0,
+        "padded_tokens_including_dummy": 1024
+      }
+    ],
+    "executed_unique_tokens_before_padding": 768,
+    "duplicated_prefix_tokens": 0,
+    "padded_tokens_including_dummy": 1024,
+    "note": "Counts exclude CP replication; allowed attention pairs are semantic, not measured kernel FLOPs."
+  },
+  "timing_scope": "CPU packing, transfers, forward/backward, gradient communication and optimizer; excludes start barrier and metrics collection. Warmup updates weights and is recorded but excluded from summary.",
+  "mean_step_seconds": 0.2011225800961256,
+  "steps": [
+    {
+      "step": 0,
+      "warmup": true,
+      "step_seconds": 1.8278407622128725,
+      "original_tokens_per_second": 560.2238560214053,
+      "supervised_tokens_per_second": 280.1119280107026,
+      "ranks": [
+        {
+          "rank": 0,
+          "dp_rank": 0,
+          "cp_rank": 0,
+          "seconds": 1.8278407622128725,
+          "peak_allocated_bytes": 25370624,
+          "peak_reserved_bytes": 29360128,
+          "microbatches": 8,
+          "loss": 5.572796821594238
+        },
+        {
+          "rank": 1,
+          "dp_rank": 0,
+          "cp_rank": 1,
+          "seconds": 1.8119370136409998,
+          "peak_allocated_bytes": 25370624,
+          "peak_reserved_bytes": 29360128,
+          "microbatches": 8,
+          "loss": 5.572796821594238
+        },
+        {
+          "rank": 2,
+          "dp_rank": 0,
+          "cp_rank": 2,
+          "seconds": 1.8142457325011492,
+          "peak_allocated_bytes": 25370624,
+          "peak_reserved_bytes": 29360128,
+          "microbatches": 8,
+          "loss": 5.572796821594238
+        },
+        {
+          "rank": 3,
+          "dp_rank": 0,
+          "cp_rank": 3,
+          "seconds": 1.814602890983224,
+          "peak_allocated_bytes": 25370624,
+          "peak_reserved_bytes": 29360128,
+          "microbatches": 8,
+          "loss": 5.572796821594238
+        }
+      ]
+    },
+    {
+      "step": 1,
+      "warmup": false,
+      "step_seconds": 0.20357230864465237,
+      "original_tokens_per_second": 5030.153692403485,
+      "supervised_tokens_per_second": 2515.0768462017427,
+      "ranks": [
+        {
+          "rank": 0,
+          "dp_rank": 0,
+          "cp_rank": 0,
+          "seconds": 0.20357230864465237,
+          "peak_allocated_bytes": 25905664,
+          "peak_reserved_bytes": 29360128,
+          "microbatches": 8,
+          "loss": 5.503394603729248
+        },
+        {
+          "rank": 1,
+          "dp_rank": 0,
+          "cp_rank": 1,
+          "seconds": 0.17327436432242393,
+          "peak_allocated_bytes": 25905664,
+          "peak_reserved_bytes": 29360128,
+          "microbatches": 8,
+          "loss": 5.503394603729248
+        },
+        {
+          "rank": 2,
+          "dp_rank": 0,
+          "cp_rank": 2,
+          "seconds": 0.17314955219626427,
+          "peak_allocated_bytes": 25905664,
+          "peak_reserved_bytes": 29360128,
+          "microbatches": 8,
+          "loss": 5.503394603729248
+        },
+        {
+          "rank": 3,
+          "dp_rank": 0,
+          "cp_rank": 3,
+          "seconds": 0.1745974700897932,
+          "peak_allocated_bytes": 25905664,
+          "peak_reserved_bytes": 29360128,
+          "microbatches": 8,
+          "loss": 5.503394603729248
+        }
+      ]
+    },
+    {
+      "step": 2,
+      "warmup": false,
+      "step_seconds": 0.19867285154759884,
+      "original_tokens_per_second": 5154.201955744647,
+      "supervised_tokens_per_second": 2577.1009778723237,
+      "ranks": [
+        {
+          "rank": 0,
+          "dp_rank": 0,
+          "cp_rank": 0,
+          "seconds": 0.19867285154759884,
+          "peak_allocated_bytes": 25905664,
+          "peak_reserved_bytes": 29360128,
+          "microbatches": 8,
+          "loss": 5.4359307289123535
+        },
+        {
+          "rank": 1,
+          "dp_rank": 0,
+          "cp_rank": 1,
+          "seconds": 0.17022432386875153,
+          "peak_allocated_bytes": 25905664,
+          "peak_reserved_bytes": 29360128,
+          "microbatches": 8,
+          "loss": 5.4359307289123535
+        },
+        {
+          "rank": 2,
+          "dp_rank": 0,
+          "cp_rank": 2,
+          "seconds": 0.16927425377070904,
+          "peak_allocated_bytes": 25905664,
+          "peak_reserved_bytes": 29360128,
+          "microbatches": 8,
+          "loss": 5.4359307289123535
+        },
+        {
+          "rank": 3,
+          "dp_rank": 0,
+          "cp_rank": 3,
+          "seconds": 0.1692573670297861,
+          "peak_allocated_bytes": 25905664,
+          "peak_reserved_bytes": 29360128,
+          "microbatches": 8,
+          "loss": 5.4359307289123535
+        }
+      ]
+    }
+  ]
+}

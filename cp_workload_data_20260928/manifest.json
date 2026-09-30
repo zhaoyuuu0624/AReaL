@@ -1,0 +1,92 @@
+[
+  {
+    "format_version": 1,
+    "source": "synthetic_random_token_ids_not_rl_rollouts",
+    "scenario": "smoke",
+    "seed": 42,
+    "vocab_size": 256,
+    "stats": {
+      "original_tokens": 1024,
+      "supervised_tokens": 512,
+      "unique_tree_tokens": 768,
+      "unique_allowed_attention_pairs": 29056,
+      "max_sequence_length": 64
+    },
+    "content_sha256": "344b2c28fa28af3805714292a8cbbbcce1e29fa626aeff9bd9776ed11fe1755d"
+  },
+  {
+    "format_version": 1,
+    "source": "synthetic_random_token_ids_not_rl_rollouts",
+    "scenario": "short_low_reuse",
+    "seed": 42,
+    "vocab_size": 256,
+    "stats": {
+      "original_tokens": 32768,
+      "supervised_tokens": 30720,
+      "unique_tree_tokens": 31744,
+      "unique_allowed_attention_pairs": 33504768,
+      "max_sequence_length": 2048
+    },
+    "content_sha256": "f9e927caa5b8475a4e70782cdb2ac04f60d0665daf9782886177f4bfb7d1355b"
+  },
+  {
+    "format_version": 1,
+    "source": "synthetic_random_token_ids_not_rl_rollouts",
+    "scenario": "long_high_reuse",
+    "seed": 42,
+    "vocab_size": 256,
+    "stats": {
+      "original_tokens": 524288,
+      "supervised_tokens": 131072,
+      "unique_tree_tokens": 180224,
+      "unique_allowed_attention_pairs": 1090609152,
+      "max_sequence_length": 8192
+    },
+    "content_sha256": "eb7f87f9e08502a09e591c884648c405b331f538001b27ce9c68b4cb77bc4a30"
+  },
+  {
+    "format_version": 1,
+    "source": "synthetic_random_token_ids_not_rl_rollouts",
+    "scenario": "nested",
+    "seed": 42,
+    "vocab_size": 256,
+    "stats": {
+      "original_tokens": 393216,
+      "supervised_tokens": 262144,
+      "unique_tree_tokens": 180224,
+      "unique_allowed_attention_pairs": 788619264,
+      "max_sequence_length": 6144
+    },
+    "content_sha256": "bf4deb5d13ac1cf87ba3b774e06389df7e820ed822078ff50c77c45ec8282aaf"
+  },
+  {
+    "format_version": 1,
+    "source": "synthetic_random_token_ids_not_rl_rollouts",
+    "scenario": "mixed_lengths",
+    "seed": 42,
+    "vocab_size": 256,
+    "stats": {
+      "original_tokens": 253952,
+      "supervised_tokens": 126976,
+      "unique_tree_tokens": 158720,
+      "unique_allowed_attention_pairs": 1220097536,
+      "max_sequence_length": 16384
+    },
+    "content_sha256": "3030ab65b38d19ee6d477592eaa7309717afbd5e15d12b2539f152adf186f1f5"
+  },
+  {
+    "format_version": 1,
+    "source": "synthetic_random_token_ids_not_rl_rollouts",
+    "scenario": "imbalanced",
+    "seed": 42,
+    "vocab_size": 256,
+    "stats": {
+      "original_tokens": 208896,
+      "supervised_tokens": 61440,
+      "unique_tree_tokens": 94208,
+      "unique_allowed_attention_pairs": 375830528,
+      "max_sequence_length": 6400
+    },
+    "content_sha256": "aed39e54ab29261114cf0a9adc22819e5a0303cb8ffdbb9a458462e60ce1f19a"
+  }
+]

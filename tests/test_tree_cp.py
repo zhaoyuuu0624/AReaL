@@ -89,25 +89,95 @@ def test_tree_cp_rejects_unsupported_attention_before_collectives(overrides, exc
 @pytest.mark.parametrize("backend", ["sdpa", "flex", "mcore", "engine"])
 def test_tree_ulysses_two_gpu_forward_backward_update(backend):
     """Run real collectives; compare against independent unshared sequences."""
-    if torch.cuda.device_count() < 2:
-        pytest.skip("Tree CP integration test requires two CUDA GPUs")
+    _run_tree_cp(2, backend)
+
+
+@pytest.mark.slow
+@pytest.mark.multi_gpu
+@pytest.mark.parametrize("backend", ["sdpa", "flex", "mcore", "engine"])
+def test_tree_ulysses_four_gpu_cp4(backend):
+    """Validate four CP shards, including GQA with one KV head per rank."""
+    _run_tree_cp(4, backend, "--cp-size", "4")
+
+
+@pytest.mark.slow
+@pytest.mark.multi_gpu
+@pytest.mark.parametrize("cp_size", [4, 2], ids=["dp1-cp4", "dp2-cp2"])
+def test_tree_ulysses_four_gpu_multistep(cp_size):
+    """Ten changing trees/steps against a serial global-batch SGD oracle."""
+    _run_tree_cp(
+        4,
+        "engine",
+        "--cp-size",
+        str(cp_size),
+        "--steps",
+        "10",
+        "--seed",
+        "42",
+        "--random-trees",
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.multi_gpu
+@pytest.mark.parametrize(
+    "world_size,cp_size",
+    [(2, 2), (4, 4), (4, 2)],
+    ids=["dp1-cp2", "dp1-cp4", "dp2-cp2"],
+)
+@pytest.mark.parametrize(
+    "precision,checkpoint",
+    [("bf16", "none"), ("fp32", "uniform"), ("bf16", "uniform")],
+    ids=["bf16", "checkpoint-fp32", "checkpoint-bf16"],
+)
+def test_tree_precision_checkpoint(world_size, cp_size, precision, checkpoint):
+    """Validate mixed precision and actual backward recomputation, separately and together."""
+    if (
+        precision == "bf16"
+        and torch.cuda.is_available()
+        and not torch.cuda.is_bf16_supported()
+    ):
+        pytest.skip("Native BF16 support is required")
+    _run_tree_cp(
+        world_size,
+        "engine",
+        "--cp-size",
+        str(cp_size),
+        "--steps",
+        "3",
+        "--random-trees",
+        "--precision",
+        precision,
+        "--checkpoint",
+        checkpoint,
+    )
+
+
+def _run_tree_cp(world_size, backend, *extra_args):
+    if torch.cuda.device_count() < world_size:
+        pytest.skip(f"Tree CP integration test requires {world_size} CUDA GPUs")
     env = dict(os.environ, OMP_NUM_THREADS="1")
     root = Path(__file__).resolve().parents[1]
+    # pytest's pythonpath setting does not propagate to torchrun children.
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(root), env.get("PYTHONPATH", "")])
+    )
     result = subprocess.run(
         [
             sys.executable,
             "-m",
             "torch.distributed.run",
             "--standalone",
-            "--nproc_per_node=2",
+            f"--nproc_per_node={world_size}",
             "tests/torchrun/run_tree_cp.py",
             "--backend",
             backend,
+            *extra_args,
         ],
         cwd=root,
         env=env,
         text=True,
         capture_output=True,
-        timeout=600,
+        timeout=1200 if "--steps" in extra_args else 600,
     )
     assert result.returncode == 0, result.stdout + result.stderr
