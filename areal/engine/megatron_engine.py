@@ -177,7 +177,9 @@ if TYPE_CHECKING:
         PPOCriticConfig,
     )
     from areal.engine.awex.colocate_writer import AwexWeightPublisher
+    from areal.engine.megatron_utils.adaptive_tree import AdaptiveTreeRuntime
     from areal.engine.megatron_utils.weight_residency import MegatronWeightResidency
+    from areal.models.tree_attn.adaptive import AdaptiveTreeConfig
 
 
 # `model.named_modules()` yields LOCAL layer indices on each PP rank, while
@@ -398,6 +400,9 @@ class MegatronEngine(TrainEngine):
         self._awex_publisher: AwexWeightPublisher | None = None
         self._dte_runtime_config = DTERuntimeConfig.from_env()
         self._warned_unbounded_microbatch = False
+        self._adaptive_tree_runtime = None
+        self._active_tree_group = None
+        self._active_tree_cap = None
         self.enable_tree_training: bool = self.config.enable_tree_training
         _validate_areal_lm_head_compatibility(
             self.mcore_config.enable_chunked_logits,
@@ -995,6 +1000,8 @@ class MegatronEngine(TrainEngine):
         # groups; the background save workers issue collectives during finalize.
         if getattr(self, "checkpointer", None) is not None:
             self.checkpointer.close()
+        if self._adaptive_tree_runtime is not None and dist.is_initialized():
+            self._adaptive_tree_runtime.close()
         if hasattr(self, "optimizer"):
             del self.optimizer
         if hasattr(self, "model"):
@@ -1356,7 +1363,11 @@ class MegatronEngine(TrainEngine):
                     mb_input.padded_mb.update(tree_kwargs)
                     tree_attn_keys = list(tree_kwargs.keys())
 
-            cp_size = mpu.get_context_parallel_world_size()
+            cp_size = (
+                self._tree_cp_size()
+                if self.enable_tree_training
+                else mpu.get_context_parallel_world_size()
+            )
             # CP-local forward keeps the vocabulary logits sharded by sequence.
             # Consumers reconstruct token scalars only; gathering logits here
             # creates the full-vocabulary CP memory spike MOPD must avoid.
@@ -1426,6 +1437,11 @@ class MegatronEngine(TrainEngine):
                 )
                 else packed_context_parallel_forward
             )
+            tree_forward_kwargs = (
+                {"cp_group": self._tree_cp_group()}
+                if forward_fn is tree_context_parallel_forward
+                else {}
+            )
             output = forward_fn(
                 model,
                 mb_input.padded_mb,
@@ -1438,6 +1454,7 @@ class MegatronEngine(TrainEngine):
                     self.dtype,
                 ),
                 return_hidden_states=use_chunked_lm_head,
+                **tree_forward_kwargs,
             )
 
             if use_chunked_lm_head:
@@ -1581,6 +1598,50 @@ class MegatronEngine(TrainEngine):
                 forward_only=forward_only,
             )
 
+    def configure_adaptive_tree_parallelism(
+        self, config: AdaptiveTreeConfig
+    ) -> AdaptiveTreeRuntime:
+        """Collectively enable experimental global-batch adaptive tree training.
+
+        Base initialization must use TP=PP=EP=CP=1. All training ranks call this
+        once, after model/optimizer creation. See AdaptiveTreeConfig and the
+        adaptive_tree_parallelism reference for supported modes and transport.
+        """
+        from areal.engine.megatron_utils.adaptive_tree import AdaptiveTreeRuntime
+
+        self._ensure_ready()
+        if self._adaptive_tree_runtime is not None:
+            raise RuntimeError("Adaptive tree runtime is already configured")
+        self._adaptive_tree_runtime = AdaptiveTreeRuntime(self, config)
+        return self._adaptive_tree_runtime
+
+    def train_adaptive_tree_batch(
+        self,
+        global_input: dict[str, torch.Tensor] | None,
+        loss_fn: Callable[..., torch.Tensor],
+        loss_weight_fn: Callable[[dict[str, Any]], torch.Tensor],
+        *,
+        cp_size: int | None = None,
+    ) -> dict[str, float]:
+        """All ranks enter; rank zero provides the global CPU tensor batch.
+
+        This is a separate collective entry point, not a per-DP RPC method.
+        cp_size is an optional source-rank override for profiling/validation.
+        The default selects CP automatically from the current tree workload.
+        """
+        if self._adaptive_tree_runtime is None:
+            raise RuntimeError("Call configure_adaptive_tree_parallelism first")
+        return self._adaptive_tree_runtime.train_batch(
+            global_input, loss_fn, loss_weight_fn, cp_size
+        )
+
+    def _tree_cp_group(self) -> dist.ProcessGroup:
+        group = getattr(self, "_active_tree_group", None)
+        return group if group is not None else mpu.get_context_parallel_group()
+
+    def _tree_cp_size(self) -> int:
+        return dist.get_world_size(self._tree_cp_group())
+
     def train_batch(
         self,
         input_: list[dict[str, Any]] | dict[str, Any],
@@ -1623,6 +1684,9 @@ class MegatronEngine(TrainEngine):
                 mpu.get_data_parallel_group(with_context_parallel=True),
                 device=self.device,
             )
+            # Adaptive trees keep the MCore CP=1 schedule and fixed DDP domain.
+            # Retain BASE DP here, not logical DP=world/active_CP: the replicated
+            # denominator and differentiable scalar SUM already cancel active CP.
             loss_multiplier = mpu.get_data_parallel_world_size() * len(mb_list)
 
         def process_output(
@@ -3057,7 +3121,11 @@ class MegatronEngine(TrainEngine):
         assert "attention_mask" in input_ and "input_ids" in input_
         # Parallel sizes
         pp_size = self.parallel_strategy.pipeline_parallel_size
-        cp_size = self.parallel_strategy.context_parallel_size
+        cp_size = (
+            self._tree_cp_size()
+            if self.enable_tree_training
+            else self.parallel_strategy.context_parallel_size
+        )
         tp_size = self.parallel_strategy.tensor_parallel_size
         if self.enable_tree_training:
             if cp_size > 1:
@@ -3076,9 +3144,17 @@ class MegatronEngine(TrainEngine):
                     raise NotImplementedError(
                         "Tree Ulysses initially supports non-FP8 dense text actors only"
                     )
+            active_cap = getattr(self, "_active_tree_cap", None)
+            mb_spec = (
+                self.config.mb_spec
+                if active_cap is None
+                else dataclasses.replace(
+                    self.config.mb_spec, max_tokens_per_mb=active_cap
+                )
+            )
             mb_list = build_packed_tree_batch(
                 input_,
-                mb_spec=self.config.mb_spec,
+                mb_spec=mb_spec,
                 pad_to_maximum=self.config.pad_to_maximum,
                 dp_group=self.data_parallel_group,
                 parallel_size=tp_size * cp_size,
@@ -3245,13 +3321,13 @@ class MegatronEngine(TrainEngine):
                 # unpack vocab stats from tree structure back to per-sequence format.
                 # This is necessary because the logits are in packed tree format where
                 # multiple sequences share prefix positions.
-                if mpu.get_context_parallel_world_size() > 1:
+                if self._tree_cp_size() > 1:
                     lp_dict, ent_dict, vocab_min_logits, vocab_max_logits = (
                         gather_tree_cp_scalars(
                             output,
                             inputs["input_ids"],
                             inputs["_tree_cp_prediction_plan"],
-                            mpu.get_context_parallel_group(),
+                            self._tree_cp_group(),
                             temperature=self.config.temperature,
                             chunk_size=self.config.logprobs_chunk_size,
                         )
@@ -3270,7 +3346,7 @@ class MegatronEngine(TrainEngine):
                 # would need per-sequence unpacking, so leave them unset.
                 vocab_mean_logits = None
                 vocab_norm_logits = None
-                if mpu.get_context_parallel_world_size() == 1:
+                if self._tree_cp_size() == 1:
                     logprobs, entropy = gather_packed_tree_logprobs_entropy(
                         output,
                         trie_node,
@@ -3416,8 +3492,13 @@ class MegatronEngine(TrainEngine):
         auxiliary gradients.
         """
         loss_weight = loss_weight.detach().to(device=loss.device, dtype=torch.int64)
-        cp_size = mpu.get_context_parallel_world_size()
-        cp_rank = mpu.get_context_parallel_rank()
+        cp_group = (
+            self._tree_cp_group()
+            if self.enable_tree_training
+            else mpu.get_context_parallel_group()
+        )
+        cp_size = dist.get_world_size(cp_group)
+        cp_rank = dist.get_rank(cp_group)
         local_weight = torch.div(loss_weight, cp_size, rounding_mode="floor")
         remainder = torch.remainder(loss_weight, cp_size)
         local_weight = local_weight + (remainder > cp_rank).to(local_weight.dtype)
@@ -3437,12 +3518,12 @@ class MegatronEngine(TrainEngine):
             if isinstance(output, ChunkedLMHeadOutput):
                 return output.logprobs
             if self.enable_tree_training:
-                if mpu.get_context_parallel_world_size() > 1:
+                if self._tree_cp_size() > 1:
                     logprobs, _, _, _ = gather_tree_cp_scalars(
                         output,
                         inputs["input_ids"],
                         inputs["_tree_cp_prediction_plan"],
-                        mpu.get_context_parallel_group(),
+                        self._tree_cp_group(),
                         temperature=self.config.temperature,
                         chunk_size=self.config.logprobs_chunk_size,
                     )

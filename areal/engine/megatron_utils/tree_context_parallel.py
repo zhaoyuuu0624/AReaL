@@ -76,6 +76,7 @@ def tree_context_parallel_forward(
     model: torch.nn.Module,
     input_: dict[str, Any],
     *,
+    cp_group: dist.ProcessGroup | None = None,
     fp32_output: bool | None = None,
     gather_cp_output: bool = False,
     is_vision_model: bool = False,
@@ -95,7 +96,8 @@ def tree_context_parallel_forward(
     # scalars, never vocabulary logits, including forward-only calls.
     input_ids = input_["input_ids"]
     positions = input_["position_ids"]
-    cp_group = mpu.get_context_parallel_group()
+    if cp_group is None:
+        cp_group = mpu.get_context_parallel_group()
     layout = TreeCPLayout(
         input_ids.shape[-1], dist.get_world_size(cp_group), dist.get_rank(cp_group)
     )

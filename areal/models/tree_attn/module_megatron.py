@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 
 import torch
+import torch.distributed as dist
 from mbridge.core import LLMBridge
 from megatron.core import parallel_state
 from megatron.core.packed_seq_params import PackedSeqParams
@@ -119,7 +120,7 @@ class PytorchFlexAttention(torch.nn.Module):
                 raise ValueError(
                     "Tree Ulysses requires a global dense boolean tree mask"
                 )
-            n = query.shape[0] * self.config.context_parallel_size
+            n = query.shape[0] * dist.get_world_size(self.cp_group)
             if attention_mask.shape != (n, n):
                 raise ValueError(
                     "Tree Ulysses mask must use global padded-tree coordinates"
