@@ -476,6 +476,7 @@ class MegatronCheckpointManager:
             rng_states["rng_tracker_states"]
         )
 
+    @torch.no_grad()
     def load_checkpoint(
         self,
         local_path: str,

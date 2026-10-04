@@ -347,6 +347,7 @@ class MegatronEngine(TrainEngine):
     stream_microbatches_from_cpu = True
     cpu_staged_rpc_methods = frozenset(
         {
+            "stage_adaptive_batch",
             "compute_logp",
             "compute_values",
             "eval_batch",
@@ -1000,6 +1001,8 @@ class MegatronEngine(TrainEngine):
         # groups; the background save workers issue collectives during finalize.
         if getattr(self, "checkpointer", None) is not None:
             self.checkpointer.close()
+        if getattr(self, "_adaptive_ppo", None) is not None and dist.is_initialized():
+            self._adaptive_ppo.close()
         if self._adaptive_tree_runtime is not None and dist.is_initialized():
             self._adaptive_tree_runtime.close()
         if hasattr(self, "optimizer"):
@@ -3628,6 +3631,7 @@ class MegatronPPOActor(MegatronEngine):
 
         super().__init__(config)
         self.actor = PPOActor(config, self)
+        self._adaptive_ppo = None
 
     def initialize(
         self,
@@ -3637,6 +3641,39 @@ class MegatronPPOActor(MegatronEngine):
         **kwargs,
     ) -> None:
         super().initialize(addr, ft_spec, *args, **kwargs)
+        if self.config.adaptive_tree is not None:
+            from areal.trainer.ppo.adaptive import AdaptivePPOBridge
+
+            self._adaptive_ppo = AdaptivePPOBridge(self)
+
+    def _adaptive_bridge(self):
+        if self._adaptive_ppo is None:
+            raise RuntimeError("actor.adaptive_tree is not configured")
+        return self._adaptive_ppo
+
+    def stage_adaptive_batch(self, data, handle: str):
+        return self._adaptive_bridge().stage(data, handle)
+
+    def release_adaptive_batch(self, handle: str):
+        return self._adaptive_bridge().release(handle)
+
+    def begin_adaptive_cycle(self, handle: str, cycle_id: int, cp_size=None):
+        return self._adaptive_bridge().begin(handle, cycle_id, cp_size)
+
+    def adaptive_compute_logp(self, handle: str):
+        return self._adaptive_bridge().compute_logp(handle)
+
+    def adaptive_compute_advantages(self, handle: str, **kwargs):
+        return self._adaptive_bridge().compute_advantages(handle, **kwargs)
+
+    def adaptive_ppo_update(self, handle: str):
+        return self._adaptive_bridge().update(handle)
+
+    def adaptive_state_dict(self):
+        return self._adaptive_bridge().state_dict()
+
+    def load_adaptive_state_dict(self, state: dict):
+        return self._adaptive_bridge().load_state_dict(state)
 
     def configure_mopd_loss(self, config) -> None:
         self.actor.configure_mopd_loss(config)

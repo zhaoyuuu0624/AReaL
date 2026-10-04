@@ -6,6 +6,7 @@ import inspect
 import json
 import os
 import pickle
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import torch.distributed as dist
@@ -52,6 +53,7 @@ class RecoverInfo:
     stats_logger_info: dict
     dataloader_info: dict | list[dict]
     checkpoint_info: dict
+    extra_state: dict = dataclasses.field(default_factory=dict)
 
     def dump(self, dump_dir: str):
         # Dumps the recover info to multiple files in `dump_dir`:
@@ -91,6 +93,9 @@ class RecoverInfo:
         checkpoint_info_path = os.path.join(dump_dir, "checkpoint_info.json")
         with open(checkpoint_info_path, "w") as f:
             json.dump(self.checkpoint_info, f, indent=4)
+
+        with open(os.path.join(dump_dir, "extra_state.json"), "w") as f:
+            json.dump(self.extra_state, f, indent=4)
 
         dataloader_info_path = os.path.join(dump_dir, "dataloader_info.pkl")
         with open(dataloader_info_path, "wb") as f:
@@ -139,7 +144,14 @@ class RecoverInfo:
                         )
                         dataloader_info = dataloader_info[dist.get_rank()]
 
+            extra_path = os.path.join(load_dir, "extra_state.json")
+            extra_state = {}
+            if os.path.exists(extra_path):
+                with open(extra_path) as f:
+                    extra_state = json.load(f)
+
             return cls(
+                extra_state=extra_state,
                 last_step_info=last_step_info,
                 saver_info=saver_info,
                 evaluator_info=evaluator_info,
@@ -303,6 +315,7 @@ class RecoverHandler:
         tokenizer: PreTrainedTokenizerFast | None = None,
         processor: AutoProcessor | None = None,
         base_model_path: str | None = None,
+        extra_state_fn: Callable[[], dict] | None = None,
     ):
         if self.config.mode in ("disabled", "off"):
             return
@@ -329,6 +342,7 @@ class RecoverHandler:
             stats_logger_info=stats_logger.state_dict(),
             dataloader_info=dataloader_info,
             checkpoint_info=self.freq_ctl.state_dict(),
+            extra_state=extra_state_fn() if extra_state_fn is not None else {},
         )
         save_root = Saver.get_save_root(
             self.config.experiment_name,

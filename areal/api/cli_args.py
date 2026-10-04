@@ -1777,8 +1777,43 @@ class RejectionSamplingConfig:
 
 
 @dataclass
+class AdaptiveTreeTrainingConfig:
+    """Opt-in v1 Megatron GRPO bridge; one CP layout per rollout/update cycle.
+
+    Requires base TP=PP=EP=CP=1, dense tree attention, zero dropout and no
+    offload or communication overlap. Token budgets are not a memory estimator.
+    Dwell and replan intervals count complete PPO cycles, not optimizer steps.
+    """
+
+    cp_sizes: list[int] = field(default_factory=lambda: [1, 2, 4])
+    local_token_budget: int = 1024
+    max_tree_tokens: int = 4096
+    min_dwell_steps: int = 3
+    min_relative_gain: float = 0.1
+    replan_interval: int = 8
+    workload_change_threshold: float = 0.25
+    attention_pair_cost: float = 1 / 1024
+    communication_token_cost: float = 0.1
+    microbatch_cost: float = 128.0
+    cp_cost_multipliers: list[float] = field(default_factory=list)
+
+    def to_runtime_config(self):
+        from areal.models.tree_attn.adaptive import AdaptiveTreeConfig
+
+        values = asdict(self)
+        values["cp_sizes"] = tuple(values["cp_sizes"])
+        values["cp_cost_multipliers"] = tuple(values["cp_cost_multipliers"])
+        return AdaptiveTreeConfig(**values)
+
+
+@dataclass
 class PPOActorConfig(TrainEngineConfig):
     """Configuration for PPO actor model, a subclass of a TrainEngine."""
+
+    adaptive_tree: AdaptiveTreeTrainingConfig | None = field(
+        default=None,
+        metadata={"help": "Experimental adaptive tree DP x CP for v1 Megatron GRPO."},
+    )
 
     # Core PPO/GRPO Parameters
     ppo_n_minibatches: int = field(

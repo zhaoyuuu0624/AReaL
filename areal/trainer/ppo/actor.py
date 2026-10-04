@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import functools
 import math
+import uuid
 from typing import Any
 
 import torch
@@ -11,6 +13,7 @@ from areal.api.cli_args import MOPDLossConfig, PPOActorConfig, RejectionSampling
 from areal.engine.core import stage_batch_for_engine
 from areal.infra import TrainController
 from areal.infra.rpc.serialization import serialize_value
+from areal.infra.utils.concurrent import run_async_task
 from areal.trainer.mopd.loss import compose_mopd_loss
 from areal.trainer.mopd.targets import aggregate_mopd_targets
 from areal.trainer.ppo.gae import (
@@ -345,6 +348,7 @@ class PPOActor:
         data: dict[str, Any],
         meta: TrajBatchMeta | None = None,
         *,
+        normalization_group=None,
         advantage_shaping_mode: str = "additive",
         gvpo_negative_scale: float = 0.2,
         gvpo_zero_penalty: float = 0.4,
@@ -415,9 +419,14 @@ class PPOActor:
                     reward_scaling=self.reward_scaling,
                     reward_clip=self.reward_clip,
                     unpenalized_rewards=unpenalized_rewards,
+                    reduce_group=normalization_group,
                 )
             else:
-                reward_score = self.reward_norm(reward_score, group_sizes=group_sizes)
+                reward_score = self.reward_norm(
+                    reward_score,
+                    group_sizes=group_sizes,
+                    reduce_group=normalization_group,
+                )
 
         token_loss_mask = data["loss_mask"].bool()
         loss_mask = token_loss_mask.float()
@@ -586,6 +595,7 @@ class PPOActor:
                 advantages,
                 loss_mask,
                 group_sizes=group_sizes,
+                reduce_group=normalization_group,
                 group_member_counts=meta.logical_group_sizes
                 if meta is not None
                 else None,
@@ -669,7 +679,7 @@ class PPOActor:
     def ppo_update(self, data: list[dict[str, Any]]) -> None:
         batched_call(self._ppo_update, data, unpack=False, pass_meta=True)
 
-    def _ppo_update(
+    def _record_batch_stats(
         self, data: dict[str, Any], meta: TrajBatchMeta | None = None
     ) -> None:
         attn_mask = data["attention_mask"]
@@ -795,6 +805,11 @@ class PPOActor:
             )
         ########## Logging code ends ##########
 
+    def _ppo_update(
+        self, data: dict[str, Any], meta: TrajBatchMeta | None = None
+    ) -> None:
+        self._record_batch_stats(data, meta)
+
         # Pop keys that are no longer needed after advantage computation
         # Note: "versions" is kept if needed for approximation/metrics in loss function
         for key in [
@@ -824,35 +839,106 @@ class PPOActor:
             for mb in mb_inputs:
                 train_stat = self.engine.train_batch(
                     mb,
-                    loss_fn=functools.partial(
-                        grpo_loss_fn,
-                        eps_clip=self.config.eps_clip,
-                        eps_clip_higher=self.config.eps_clip_higher,
-                        c_clip=self.config.c_clip,
-                        rejection_sampling=self.config.rejection_sampling,
-                        m2_threshold=self.m2_threshold,
-                        importance_sampling_level=self.config.importance_sampling_level,
-                        current_version=current_version,
-                        prox_logp_method=self.config.prox_logp_method,
-                        use_sapo_loss=self.config.use_sapo_loss,
-                        sapo_tau_pos=self.config.sapo_tau_pos,
-                        sapo_tau_neg=self.config.sapo_tau_neg,
-                        use_cispo_loss=self.config.use_cispo_loss,
-                        use_decoupled_loss=self.config.use_decoupled_loss,
-                        mopd_loss_config=self._mopd_loss_config,
-                    ),
+                    loss_fn=self._make_loss_fn(current_version),
                     loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
                 )
                 stats_tracker.scalar(**train_stat)
 
+    def _make_loss_fn(self, current_version: int, *, record_stats: bool = True):
+        return functools.partial(
+            grpo_loss_fn,
+            record_stats=record_stats,
+            eps_clip=self.config.eps_clip,
+            eps_clip_higher=self.config.eps_clip_higher,
+            c_clip=self.config.c_clip,
+            rejection_sampling=self.config.rejection_sampling,
+            m2_threshold=self.m2_threshold,
+            importance_sampling_level=self.config.importance_sampling_level,
+            current_version=current_version,
+            prox_logp_method=self.config.prox_logp_method,
+            use_sapo_loss=self.config.use_sapo_loss,
+            sapo_tau_pos=self.config.sapo_tau_pos,
+            sapo_tau_neg=self.config.sapo_tau_neg,
+            use_cispo_loss=self.config.use_cispo_loss,
+            use_decoupled_loss=self.config.use_decoupled_loss,
+            mopd_loss_config=self._mopd_loss_config,
+        )
+
 
 class PPOActorController(TrainController):
+    def _adaptive_call(self, method: str, data, *, source_only=False, **kwargs):
+        """Materialize source input before dispatching collective execution.
+
+        The execute RPC contains no RTensors, so a failed source fetch cannot
+        strand peers inside model collectives. Static worker/head metadata and
+        the existing all-worker RTensor cleanup domain remain unchanged.
+        """
+        if not all(self.workers_is_dp_head):
+            raise ValueError("adaptive_tree requires base CP=TP=PP=1")
+        handle = uuid.uuid4().hex
+
+        async def call():
+            source = self.workers[0]
+            await self.scheduler.async_call_engine(
+                source.id,
+                "stage_adaptive_batch",
+                self._engine_name(0),
+                data,
+                handle,
+                rpc_meta={"broadcast": False},
+            )
+            try:
+                tasks = [
+                    self.scheduler.async_call_engine(
+                        worker.id,
+                        method,
+                        self._engine_name(i),
+                        handle,
+                        rpc_meta={"broadcast": False},
+                        **kwargs,
+                    )
+                    for i, worker in enumerate(self.workers)
+                    if not source_only or i == 0
+                ]
+                results = await asyncio.gather(*tasks)
+                return results[0]
+            finally:
+                await self.scheduler.async_call_engine(
+                    source.id,
+                    "release_adaptive_batch",
+                    self._engine_name(0),
+                    handle,
+                    rpc_meta={"broadcast": False},
+                )
+
+        return run_async_task(call)
+
+    def begin_adaptive_cycle(self, data, cycle_id: int, cp_size=None):
+        from areal.trainer.ppo.adaptive import stamp_trajectory_ids
+
+        stamp_trajectory_ids(data)
+        return self._adaptive_call(
+            "begin_adaptive_cycle", data, cycle_id=cycle_id, cp_size=cp_size
+        )
+
+    def adaptive_state_dict(self):
+        return self._custom_function_call(
+            "adaptive_state_dict", rpc_meta={"broadcast": False}
+        )
+
+    def load_adaptive_state_dict(self, state: dict):
+        self._custom_function_call(
+            "load_adaptive_state_dict", state, rpc_meta={"broadcast": False}
+        )
+
     def configure_mopd_loss(self, config: MOPDLossConfig) -> None:
         self._custom_function_call(
             "configure_mopd_loss", config, rpc_meta={"broadcast": True}
         )
 
     def compute_logp(self, *args, **kwargs):
+        if getattr(getattr(self, "config", None), "adaptive_tree", None) is not None:
+            return self._adaptive_call("adaptive_compute_logp", *args, **kwargs)
         return self._custom_function_call(
             "compute_logp", *args, rpc_meta={"broadcast": True}, **kwargs
         )
@@ -886,6 +972,10 @@ class PPOActorController(TrainController):
         return results[:original_size], results[original_size:]
 
     def compute_advantages(self, *args, **kwargs):
+        if getattr(getattr(self, "config", None), "adaptive_tree", None) is not None:
+            return self._adaptive_call(
+                "adaptive_compute_advantages", *args, source_only=True, **kwargs
+            )
         if (
             self.train_alloc.backend != "megatron"
             or not args
@@ -955,6 +1045,8 @@ class PPOActorController(TrainController):
         )
 
     def ppo_update(self, *args, **kwargs) -> None:
+        if getattr(getattr(self, "config", None), "adaptive_tree", None) is not None:
+            return self._adaptive_call("adaptive_ppo_update", *args, **kwargs)
         self._custom_function_call(
             "ppo_update", *args, rpc_meta={"broadcast": True}, **kwargs
         )
@@ -1046,6 +1138,7 @@ def grpo_loss_fn(
     use_cispo_loss: bool = False,
     use_decoupled_loss: bool = False,
     mopd_loss_config: MOPDLossConfig | None = None,
+    record_stats: bool = True,
     vocab_min_logits: torch.Tensor | None = None,
     vocab_max_logits: torch.Tensor | None = None,
     vocab_mean_logits: torch.Tensor | None = None,
@@ -1098,6 +1191,8 @@ def grpo_loss_fn(
             loss_mask=loss_mask,
             normalization_mask=normalization_mask,
         )
+        if not record_stats:
+            return loss
         stats_tracker.denominator(
             n_tokens=infer_token_denominator(input_data, loss_mask),
             n_valid_tokens=normalization_mask,
@@ -1254,6 +1349,9 @@ def grpo_loss_fn(
             rkl_penalty = rkl_penalty_per_token.sum() / loss_mask.sum().clamp(min=1)
             loss = rl_loss_weight * loss + distill_loss_weight * rkl_penalty
             rkl_stat = rkl_penalty_per_token
+
+    if not record_stats:
+        return loss
 
     # Log training statistics
     stats_tracker.denominator(

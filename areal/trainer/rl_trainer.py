@@ -225,6 +225,7 @@ class PPOTrainer:
             logging.setup_file_logging(StatsLogger.get_log_path(config.stats_logger))
 
         self.config = config
+        self._validate_adaptive_tree_config()
         self.mopd_execution_plan = MOPDExecutionPlan.from_config(config)
         self._apply_dte_config_envvars()
         self.processor, self.tokenizer = load_hf_processor_and_tokenizer(
@@ -607,6 +608,19 @@ class PPOTrainer:
             colocated_rollout=self._is_actor_rollout_colocated(config),
         )
 
+        if self.recover_info is not None:
+            adaptive_state = self.recover_info.extra_state.get("adaptive_tree")
+            if config.actor.adaptive_tree is not None and adaptive_state is None:
+                raise ValueError(
+                    "Checkpoint has no adaptive_tree control state; use a matching adaptive checkpoint or start a new run"
+                )
+            if adaptive_state is not None:
+                if config.actor.adaptive_tree is None:
+                    raise ValueError(
+                        "Recovered checkpoint requires actor.adaptive_tree"
+                    )
+                self.actor.load_adaptive_state_dict(adaptive_state)
+
         # After recovery, sync the staleness manager so its capacity formula
         # stays bounded despite the version jumping from 0 to recovery_version.
         if self.recover_info is not None:
@@ -620,6 +634,51 @@ class PPOTrainer:
 
         self._config_perf_tracer()
         self._apply_initial_offload_policy()
+
+    def _validate_adaptive_tree_config(self) -> None:
+        config = self.config
+        adaptive = config.actor.adaptive_tree
+        if adaptive is None:
+            return
+        from areal.trainer.ppo.adaptive import validate_adaptive_actor_config
+
+        validate_adaptive_actor_config(config.actor)
+        if not is_single_controller():
+            raise ValueError("adaptive_tree currently requires single-controller mode")
+        parallel = ModelAllocation.from_str(config.actor.backend).parallel
+        if any(
+            size != 1
+            for size in (
+                parallel.tp_size,
+                parallel.pp_size,
+                parallel.cp_size,
+                parallel.ep_size,
+            )
+        ):
+            raise ValueError("adaptive_tree requires base TP=PP=EP=CP=1")
+        if (
+            config.critic is not None
+            or config.teacher is not None
+            or config.mopd is not None
+        ):
+            raise ValueError(
+                "adaptive_tree first supports critic-free GRPO without teachers/MOPD"
+            )
+        if self._is_actor_rollout_colocated(config):
+            raise ValueError(
+                "adaptive_tree requires separate actor and rollout placement"
+            )
+        if config.ref is not None:
+            if config.ref.adaptive_tree is not None:
+                raise ValueError(
+                    "The reference engine must use a static CP configuration"
+                )
+            cap = config.ref.mb_spec.max_tokens_per_mb
+            if cap is None or cap < adaptive.max_tree_tokens:
+                raise ValueError(
+                    "Static reference mb_spec.max_tokens_per_mb must cover "
+                    "actor.adaptive_tree.max_tree_tokens"
+                )
 
     def _should_initialize_eval_rollout(self) -> bool:
         """Return whether this trainer has evaluation data to serve."""
@@ -1064,6 +1123,8 @@ class PPOTrainer:
 
             if self._should_offload_actor:
                 self._onload_model(self.actor, role="actor")
+            if config.actor.adaptive_tree is not None:
+                self.actor.begin_adaptive_cycle(rollout_batch, cycle_id=global_step)
             should_compute_prox_logp = (
                 self.mopd_execution_plan.requires_prox_logp
                 if self.mopd_execution_plan is not None
@@ -1816,6 +1877,15 @@ class PPOTrainer:
             self.train_dataloader,
             tokenizer=self.tokenizer,
             processor=self.processor,
+            **(
+                {
+                    "extra_state_fn": lambda: {
+                        "adaptive_tree": self.actor.adaptive_state_dict()
+                    }
+                }
+                if self.config.actor.adaptive_tree is not None
+                else {}
+            ),
         )
 
         if not is_single_controller():
